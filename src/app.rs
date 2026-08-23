@@ -312,6 +312,9 @@ impl App<'_> {
         let Some(hash) = self.view.selected_commit_hash() else {
             return;
         };
+        if self.repository.line_stats(hash).is_some() {
+            return;
+        }
         let key = hash.as_str().to_string();
         if self.diff_stats.contains_key(&key) || self.diff_stats_pending.contains(&key) {
             return;
@@ -409,7 +412,11 @@ impl App<'_> {
                 .fg(self.ctx.color_theme.detail_name_fg),
         ]);
         let mut line = line;
-        if let Some(Some((ins, del))) = self.diff_stats.get(hash.as_str()) {
+        let stats = self
+            .repository
+            .line_stats(hash)
+            .or_else(|| self.diff_stats.get(hash.as_str()).copied().flatten());
+        if let Some((ins, del)) = stats {
             line.push_span(ratatui::text::Span::raw("  "));
             line.push_span(
                 format!("+{ins}").fg(self.ctx.color_theme.detail_file_change_add_fg),
