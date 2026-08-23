@@ -217,6 +217,10 @@ impl Repository {
         self.ref_map.values().flatten().collect()
     }
 
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub fn head(&self) -> &Head {
         &self.head
     }
@@ -733,6 +737,42 @@ pub fn get_diff_summary(path: &Path, commit_hash: &CommitHash) -> Vec<FileChange
     cmd.wait().unwrap();
 
     changes
+}
+
+/// Total inserted and deleted line counts, GitHub style. Binary files
+/// report "-" in numstat and count as zero.
+pub fn diff_line_stats(path: &Path, commit: &Commit) -> Option<(u64, u64)> {
+    let output = if matches!(commit.commit_type, CommitType::WorkingTree) {
+        Command::new("git")
+            .args(["diff", "--numstat", "HEAD"])
+            .current_dir(path)
+            .output()
+    } else if commit.parent_commit_hashes.is_empty() {
+        Command::new("git")
+            .args(["show", "--numstat", "--format="])
+            .arg(commit.commit_hash.as_str())
+            .current_dir(path)
+            .output()
+    } else {
+        Command::new("git")
+            .arg("diff")
+            .arg("--numstat")
+            .arg(format!("{}^", commit.commit_hash.as_str()))
+            .arg(commit.commit_hash.as_str())
+            .current_dir(path)
+            .output()
+    };
+    let out = output.ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let (mut ins, mut del) = (0u64, 0u64);
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let mut cols = line.split('\t');
+        ins += cols.next().and_then(|c| c.parse::<u64>().ok()).unwrap_or(0);
+        del += cols.next().and_then(|c| c.parse::<u64>().ok()).unwrap_or(0);
+    }
+    Some((ins, del))
 }
 
 pub fn get_worktree_diff_summary(path: &Path) -> Vec<FileChange> {
