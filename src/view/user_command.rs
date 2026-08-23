@@ -247,6 +247,12 @@ impl<'a> UserCommandView<'a> {
         self.commit_user_command_state.select_first();
     }
 
+    pub fn selected_commit_hash(&self) -> Option<&crate::git::CommitHash> {
+        self.commit_list_state
+            .as_ref()
+            .map(|s| s.selected_commit_hash())
+    }
+
     pub fn refresh(&self) {
         let list_state = self.as_list_state();
         let list_context = ListRefreshViewContext::from(list_state);
