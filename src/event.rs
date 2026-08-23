@@ -34,6 +34,7 @@ pub enum AppEvent {
     CopyToClipboard { name: String, value: String },
     Refresh(RefreshViewContext),
     WorktreeStatusChanged,
+    DiffStatsLoaded(String, Option<(u64, u64)>),
     ClearStatusLine,
     UpdateStatusInput(String, Option<u16>, Option<String>),
     NotifyInfo(String),
