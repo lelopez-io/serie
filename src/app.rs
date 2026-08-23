@@ -5,7 +5,7 @@ use std::{
 
 use ratatui::{
     crossterm::event::{KeyCode, KeyEvent},
-    layout::{Constraint, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style, Stylize},
     text::Line,
     widgets::{Block, Borders, Padding, Paragraph},
@@ -356,7 +356,7 @@ impl App<'_> {
             .with_timezone(&chrono::Local)
             .format("%Y-%m-%d %H:%M");
         let line = Line::from(vec![
-            " \u{2299} ".fg(self.ctx.color_theme.divider_fg),
+            "\u{2299} ".fg(self.ctx.color_theme.divider_fg),
             commit
                 .commit_hash
                 .as_short_hash()
@@ -369,7 +369,18 @@ impl App<'_> {
                 .as_str()
                 .fg(self.ctx.color_theme.detail_name_fg),
         ]);
-        f.render_widget(Paragraph::new(line), area);
+        // Right-aligned so the metadata anchors the row's end, clear of
+        // the graph lane; the top border is the hr separating it from
+        // the list, styled like the status line's.
+        let paragraph = Paragraph::new(line)
+            .alignment(Alignment::Right)
+            .block(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .style(Style::default().fg(self.ctx.color_theme.divider_fg))
+                    .padding(Padding::horizontal(1)),
+            );
+        f.render_widget(paragraph, area);
     }
 
     fn render_status_line(&self, f: &mut Frame, area: Rect) {
@@ -437,7 +448,7 @@ impl App<'_> {
 fn split_app_areas(area: Rect) -> [Rect; 3] {
     Layout::vertical([
         Constraint::Min(0),
-        Constraint::Length(1),
+        Constraint::Length(2), // meta line: hr + content
         Constraint::Length(2),
     ])
     .areas(area)
