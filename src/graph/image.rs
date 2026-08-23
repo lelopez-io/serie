@@ -10,7 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     color::GraphColorSet,
-    git::CommitHash,
+    git::{CommitHash, WORKING_TREE_HASH},
     graph::{
         geometry::{bounding_box_u32, Point},
         Edge, EdgeType, Graph,
@@ -233,6 +233,10 @@ fn build_single_graph_row_image(
 
     let cell_count = max_pos_x + 1;
 
+    // The working-tree row draws hollow, like an unfilled radio button,
+    // so uncommitted state reads differently from committed nodes.
+    let hollow = commit_hash.as_str() == WORKING_TREE_HASH;
+
     calc_graph_row_image(
         pos_x,
         cell_count,
@@ -240,6 +244,7 @@ fn build_single_graph_row_image(
         image_params,
         drawing_pixels,
         graph_style,
+        hollow,
     )
 }
 
@@ -249,6 +254,7 @@ type Pixels = FxHashSet<(i32, i32)>;
 pub struct DrawingPixels {
     circle: Pixels,
     circle_edge: Pixels,
+    hollow_circle: Pixels,
     vertical_edge: Pixels,
     horizontal_edge: Pixels,
     up_edge: Pixels,
@@ -265,6 +271,7 @@ impl DrawingPixels {
     pub fn new(image_params: &ImageParams) -> Self {
         let circle = calc_commit_circle_drawing_pixels(image_params);
         let circle_edge = calc_circle_edge_drawing_pixels(image_params);
+        let hollow_circle = calc_hollow_circle_drawing_pixels(image_params);
         let vertical_edge = calc_vertical_edge_drawing_pixels(image_params);
         let horizontal_edge = calc_horizontal_edge_drawing_pixels(image_params);
         let up_edge = calc_up_edge_drawing_pixels(image_params);
@@ -279,6 +286,7 @@ impl DrawingPixels {
         Self {
             circle,
             circle_edge,
+            hollow_circle,
             vertical_edge,
             horizontal_edge,
             up_edge,
@@ -295,6 +303,14 @@ impl DrawingPixels {
 
 fn calc_commit_circle_drawing_pixels(image_params: &ImageParams) -> Pixels {
     calc_circle_drawing_pixels(image_params, image_params.circle_inner_radius as i32)
+}
+
+fn calc_hollow_circle_drawing_pixels(image_params: &ImageParams) -> Pixels {
+    let ring = (image_params.line_width as i32).max(2);
+    let hole = ((image_params.circle_inner_radius as i32) - ring).max(1);
+    let outer = calc_circle_drawing_pixels(image_params, image_params.circle_inner_radius as i32);
+    let inner = calc_circle_drawing_pixels(image_params, hole);
+    outer.difference(&inner).cloned().collect()
 }
 
 fn calc_circle_edge_drawing_pixels(image_params: &ImageParams) -> Pixels {
@@ -606,6 +622,7 @@ pub fn calc_graph_row_image(
     image_params: &ImageParams,
     drawing_pixels: &DrawingPixels,
     graph_style: GraphStyle,
+    hollow: bool,
 ) -> GraphRowImage {
     let image_width = (image_params.width as usize * cell_count) as u32;
     let image_height = image_params.height as u32;
@@ -613,7 +630,7 @@ pub fn calc_graph_row_image(
     let mut img_buf = image::ImageBuffer::new(image_width, image_height);
 
     draw_background(&mut img_buf, image_params);
-    draw_commit_circle(&mut img_buf, commit_pos_x, image_params, drawing_pixels);
+    draw_commit_circle(&mut img_buf, commit_pos_x, image_params, drawing_pixels, hollow);
 
     match graph_style {
         GraphStyle::Rounded => {
@@ -664,11 +681,17 @@ fn draw_commit_circle(
     circle_pos_x: usize,
     image_params: &ImageParams,
     drawing_pixels: &DrawingPixels,
+    hollow: bool,
 ) {
     let x_offset = (circle_pos_x * image_params.width as usize) as i32;
     let color = image_params.edge_color(circle_pos_x);
 
-    for (x, y) in &drawing_pixels.circle {
+    let fill = if hollow {
+        &drawing_pixels.hollow_circle
+    } else {
+        &drawing_pixels.circle
+    };
+    for (x, y) in fill {
         let x = (*x + x_offset) as u32;
         let y = *y as u32;
 
@@ -1175,6 +1198,7 @@ mod tests {
                     &image_params,
                     &drawing_pixels,
                     graph_style,
+                    false,
                 )
             })
             .collect();
