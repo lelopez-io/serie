@@ -166,6 +166,7 @@ fn main() -> Result<()> {
         image_protocol,
     });
 
+    let ec = event::EventController::init(ctx.ui_config.common.mouse);
 
     let mut refresh_view_context = None;
     let mut terminal = None;
@@ -217,10 +218,7 @@ fn main() -> Result<()> {
     };
 
     if ctx.ui_config.common.mouse {
-        let _ = ratatui::crossterm::execute!(
-            std::io::stdout(),
-            ratatui::crossterm::event::DisableMouseCapture
-        );
+        event::disable_click_reporting();
     }
     ratatui::restore();
     ret.map_err(Into::into)

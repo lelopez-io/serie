@@ -75,6 +75,23 @@ impl Debug for Receiver {
     }
 }
 
+// Mode 1000 (clicks and wheel) plus 1006 (SGR encoding) only — never
+// 1002/1003, so drags are not reported and a surrounding multiplexer
+// keeps its own drag-selection (and clipboard forwarding) intact.
+pub fn enable_click_reporting() {
+    use std::io::Write;
+    let mut out = std::io::stdout();
+    let _ = out.write_all(b"\x1b[?1000h\x1b[?1006h");
+    let _ = out.flush();
+}
+
+pub fn disable_click_reporting() {
+    use std::io::Write;
+    let mut out = std::io::stdout();
+    let _ = out.write_all(b"\x1b[?1006l\x1b[?1000l");
+    let _ = out.flush();
+}
+
 #[derive(Debug)]
 pub struct EventController {
     tx: Sender,
@@ -98,10 +115,7 @@ impl EventController {
             mouse,
         };
         if mouse {
-            let _ = ratatui::crossterm::execute!(
-                std::io::stdout(),
-                ratatui::crossterm::event::EnableMouseCapture
-            );
+            enable_click_reporting();
         }
         controller.start();
 
@@ -153,10 +167,7 @@ impl EventController {
         .unwrap();
         ratatui::crossterm::terminal::enable_raw_mode().unwrap();
         if self.mouse {
-            let _ = ratatui::crossterm::execute!(
-                std::io::stdout(),
-                ratatui::crossterm::event::EnableMouseCapture
-            );
+            enable_click_reporting();
         }
 
         self.drain_crossterm_event();
@@ -166,10 +177,7 @@ impl EventController {
     pub fn suspend(&self) {
         self.stop();
         if self.mouse {
-            let _ = ratatui::crossterm::execute!(
-                std::io::stdout(),
-                ratatui::crossterm::event::DisableMouseCapture
-            );
+            disable_click_reporting();
         }
 
         ratatui::crossterm::terminal::disable_raw_mode().unwrap();
