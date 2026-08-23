@@ -63,6 +63,11 @@ impl<'a> ListView<'a> {
                 UserEvent::Quit => {
                     self.tx.send(AppEvent::Quit);
                 }
+                // The list is the root view: backing out of it means
+                // quitting, so a close key (q) works at every depth.
+                UserEvent::Close => {
+                    self.tx.send(AppEvent::Quit);
+                }
                 UserEvent::NavigateDown | UserEvent::SelectDown => {
                     for _ in 0..count {
                         self.as_mut_list_state().select_next();
