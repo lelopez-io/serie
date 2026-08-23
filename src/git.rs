@@ -433,7 +433,8 @@ fn to_commit_map(commits: Vec<Commit>) -> CommitMap {
 }
 
 /// A virtual row for uncommitted changes, parented on HEAD so the graph
-/// draws it like a stash. None when the working tree is clean.
+/// draws it like a stash. Always present (counts read 0 when clean), so
+/// refreshes never insert or remove a row under the selection.
 fn load_worktree_commit(path: &Path) -> Option<Commit> {
     let status = Command::new("git")
         .arg("status")
@@ -441,7 +442,7 @@ fn load_worktree_commit(path: &Path) -> Option<Commit> {
         .current_dir(path)
         .output()
         .ok()?;
-    if !status.status.success() || status.stdout.is_empty() {
+    if !status.status.success() {
         return None;
     }
     let (mut changed, mut untracked) = (0u32, 0u32);
