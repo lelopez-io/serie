@@ -196,7 +196,7 @@ impl<'a> ListView<'a> {
         self.commit_list_state.take().unwrap()
     }
 
-    fn as_mut_list_state(&mut self) -> &mut CommitListState<'a> {
+    pub fn as_mut_list_state(&mut self) -> &mut CommitListState<'a> {
         self.commit_list_state.as_mut().unwrap()
     }
 

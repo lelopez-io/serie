@@ -342,6 +342,10 @@ pub struct UiConfig {
 pub struct UiCommonConfig {
     #[default(CursorType::Native)]
     pub cursor_type: CursorType,
+    // Mouse capture routes clicks and the wheel to serie; multiplexer
+    // drag-selection then needs the terminal's own bypass (shift+drag).
+    #[default = true]
+    pub mouse: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -519,6 +523,7 @@ mod tests {
             ui: UiConfig {
                 common: UiCommonConfig {
                     cursor_type: CursorType::Native,
+                    mouse: true,
                 },
                 list: UiListConfig {
                     columns: vec![
@@ -678,6 +683,7 @@ mod tests {
             ui: UiConfig {
                 common: UiCommonConfig {
                     cursor_type: CursorType::Virtual("|".into()),
+                    mouse: true,
                 },
                 list: UiListConfig {
                     columns: vec![
@@ -762,6 +768,7 @@ mod tests {
             ui: UiConfig {
                 common: UiCommonConfig {
                     cursor_type: CursorType::Native,
+                    mouse: true,
                 },
                 list: UiListConfig {
                     columns: vec![

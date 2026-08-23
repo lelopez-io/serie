@@ -84,6 +84,7 @@ pub struct App<'a> {
     hook_last_seen: Option<CommitHash>,
     diff_stats: FxHashMap<String, Option<(u64, u64)>>,
     diff_stats_pending: FxHashSet<String>,
+    last_click: Option<(std::time::Instant, usize)>,
 }
 
 impl<'a> App<'a> {
@@ -147,6 +148,7 @@ impl<'a> App<'a> {
             hook_last_seen: None,
             diff_stats: FxHashMap::default(),
             diff_stats_pending: FxHashSet::default(),
+            last_click: None,
         };
 
         if let Some(context) = refresh_view_context {
@@ -226,6 +228,9 @@ impl App<'_> {
                             }
                         }
                     }
+                }
+                AppEvent::Mouse(m) => {
+                    self.handle_mouse(m);
                 }
                 AppEvent::Resize(w, h) => {
                     let _ = (w, h);
@@ -316,6 +321,63 @@ impl App<'_> {
     // Line totals for the status-row metadata are computed off-thread
     // and cached per hash: a git call per selected commit, never on the
     // render path, so fast scrolling stays smooth.
+    // Click selects (the on-select hook then follows), double click
+    // opens the detail view, and the wheel scrolls. Clicks map rows only
+    // in the list view; other views take wheel navigation.
+    fn handle_mouse(&mut self, m: ratatui::crossterm::event::MouseEvent) {
+        use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+        let dummy_key = KeyEvent::new(
+            ratatui::crossterm::event::KeyCode::Null,
+            ratatui::crossterm::event::KeyModifiers::NONE,
+        );
+        match m.kind {
+            MouseEventKind::ScrollDown => {
+                let ev = if matches!(self.view, View::List(_)) {
+                    UserEvent::ScrollDown
+                } else {
+                    UserEvent::NavigateDown
+                };
+                self.view
+                    .handle_event(UserEventWithCount::new(ev, 3), dummy_key);
+            }
+            MouseEventKind::ScrollUp => {
+                let ev = if matches!(self.view, View::List(_)) {
+                    UserEvent::ScrollUp
+                } else {
+                    UserEvent::NavigateUp
+                };
+                self.view
+                    .handle_event(UserEventWithCount::new(ev, 3), dummy_key);
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let View::List(ref mut view) = self.view else {
+                    return;
+                };
+                let area = self.app_status.view_area;
+                if m.row < area.y || m.row >= area.y + area.height {
+                    return;
+                }
+                let row = (m.row - area.y) as usize;
+                if !view.as_mut_list_state().select_visible_row(row) {
+                    return;
+                }
+                let now = std::time::Instant::now();
+                let double = self
+                    .last_click
+                    .replace((now, row))
+                    .is_some_and(|(t, r)| r == row && now.duration_since(t).as_millis() < 400);
+                if double {
+                    self.tx_confirm();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn tx_confirm(&mut self) {
+        self.ec.send(AppEvent::OpenDetail);
+    }
+
     fn request_diff_stats(&mut self) {
         let Some(hash) = self.view.selected_commit_hash() else {
             return;

@@ -19,6 +19,7 @@ use crate::view::RefreshViewContext;
 pub enum AppEvent {
     Key(KeyEvent),
     Resize(usize, usize),
+    Mouse(ratatui::crossterm::event::MouseEvent),
     Quit,
     OpenDetail,
     CloseDetail,
@@ -82,10 +83,11 @@ pub struct EventController {
     rx: Receiver,
     stop: Arc<AtomicBool>,
     handle: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
+    mouse: bool,
 }
 
 impl EventController {
-    pub fn init() -> Self {
+    pub fn init(mouse: bool) -> Self {
         let (tx, rx) = mpsc::channel();
         let tx = Sender { tx };
         let rx = Receiver { rx };
@@ -95,7 +97,14 @@ impl EventController {
             rx,
             stop: Arc::new(AtomicBool::new(false)),
             handle: Arc::new(Mutex::new(None)),
+            mouse,
         };
+        if mouse {
+            let _ = ratatui::crossterm::execute!(
+                std::io::stdout(),
+                ratatui::crossterm::event::EnableMouseCapture
+            );
+        }
         controller.start();
 
         controller
@@ -117,6 +126,9 @@ impl EventController {
                         }
                         ratatui::crossterm::event::Event::Resize(w, h) => {
                             tx.send(AppEvent::Resize(w as usize, h as usize));
+                        }
+                        ratatui::crossterm::event::Event::Mouse(m) => {
+                            tx.send(AppEvent::Mouse(m));
                         }
                         _ => {}
                     },
@@ -142,6 +154,12 @@ impl EventController {
         )
         .unwrap();
         ratatui::crossterm::terminal::enable_raw_mode().unwrap();
+        if self.mouse {
+            let _ = ratatui::crossterm::execute!(
+                std::io::stdout(),
+                ratatui::crossterm::event::EnableMouseCapture
+            );
+        }
 
         self.drain_crossterm_event();
         self.start();
@@ -149,6 +167,12 @@ impl EventController {
 
     pub fn suspend(&self) {
         self.stop();
+        if self.mouse {
+            let _ = ratatui::crossterm::execute!(
+                std::io::stdout(),
+                ratatui::crossterm::event::DisableMouseCapture
+            );
+        }
 
         ratatui::crossterm::terminal::disable_raw_mode().unwrap();
         ratatui::crossterm::execute!(

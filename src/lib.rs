@@ -158,7 +158,7 @@ pub fn run() -> Result<()> {
         image_protocol,
     });
 
-    let ec = event::EventController::init();
+    let ec = event::EventController::init(ctx.ui_config.common.mouse);
 
     // Debounced dispatcher for select-triggered user commands: the app
     // sends (hash, expanded argv) on every committed selection change;
@@ -312,6 +312,12 @@ pub fn run() -> Result<()> {
         }
     };
 
+    if ctx.ui_config.common.mouse {
+        let _ = ratatui::crossterm::execute!(
+            std::io::stdout(),
+            ratatui::crossterm::event::DisableMouseCapture
+        );
+    }
     ratatui::restore();
     ret.map_err(Into::into)
 }
