@@ -146,6 +146,17 @@ impl<'a> View<'a> {
         View::Help(Box::new(HelpView::new(before, ctx, tx)))
     }
 
+    pub fn selected_commit_hash(&self) -> Option<&crate::git::CommitHash> {
+        match self {
+            View::Default => None,
+            View::List(view) => view.selected_commit_hash(),
+            View::Detail(view) => view.selected_commit_hash(),
+            View::UserCommand(view) => view.selected_commit_hash(),
+            View::Refs(view) => view.selected_commit_hash(),
+            View::Help(view) => view.selected_commit_hash(),
+        }
+    }
+
     pub fn refresh(&mut self) {
         match self {
             View::Default => {}

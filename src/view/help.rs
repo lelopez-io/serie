@@ -146,6 +146,10 @@ impl HelpView<'_> {
 }
 
 impl<'a> HelpView<'a> {
+    pub fn selected_commit_hash(&self) -> Option<&crate::git::CommitHash> {
+        self.before.selected_commit_hash()
+    }
+
     pub fn take_before_view(&mut self) -> View<'a> {
         std::mem::take(&mut self.before)
     }
