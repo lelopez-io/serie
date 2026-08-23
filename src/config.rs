@@ -151,7 +151,7 @@ pub struct CoreSearchConfig {
 #[optional]
 #[derive(Debug, Clone, PartialEq, Eq, SmartDefault, Validate)]
 pub struct CoreUserCommandConfig {
-    #[garde(dive)]
+    #[garde(dive, custom(validate_single_select_trigger))]
     #[default(FxHashMap::from_iter([("1".into(), UserCommand {
         name: "git diff".into(),
         r#type: UserCommandType::Inline,
@@ -164,11 +164,15 @@ pub struct CoreUserCommandConfig {
             "{{target_hash}}".into(),
         ],
         refresh: false,
+        trigger: UserCommandTrigger::Keybind,
     })]))]
     pub commands: FxHashMap<String, UserCommand>,
     #[garde(range(min = 0))]
     #[default = 4]
     pub tab_width: u16,
+    #[garde(range(min = 0))]
+    #[default = 120]
+    pub on_select_debounce_ms: u64,
 }
 
 impl<'de> Deserialize<'de> for OptionalCoreUserCommandConfig {
@@ -194,6 +198,7 @@ impl<'de> Deserialize<'de> for OptionalCoreUserCommandConfig {
             {
                 let mut commands = FxHashMap::default();
                 let mut tab_width = None;
+                let mut on_select_debounce_ms = None;
 
                 while let Some(key) = map.next_key::<String>()? {
                     if let Some(suffix) = key.strip_prefix("commands_") {
@@ -207,6 +212,8 @@ impl<'de> Deserialize<'de> for OptionalCoreUserCommandConfig {
                         commands.insert(command_key, command_value);
                     } else if key == "tab_width" {
                         tab_width = Some(map.next_value()?);
+                    } else if key == "on_select_debounce_ms" {
+                        on_select_debounce_ms = Some(map.next_value()?);
                     } else if key == "commands" {
                         return Err(V::Error::custom(
                             "invalid key `commands`, use `commands_n` format instead",
@@ -225,6 +232,7 @@ impl<'de> Deserialize<'de> for OptionalCoreUserCommandConfig {
                 Ok(OptionalCoreUserCommandConfig {
                     commands,
                     tab_width,
+                    on_select_debounce_ms,
                 })
             }
         }
@@ -245,6 +253,9 @@ pub struct UserCommand {
     #[serde(default)]
     #[garde(custom(validate_user_command_refresh(&self.r#type)))]
     pub refresh: bool,
+    #[serde(default)]
+    #[garde(custom(validate_user_command_trigger(&self.r#type, self.refresh)))]
+    pub trigger: UserCommandTrigger,
 }
 
 fn validate_user_command_refresh(
@@ -258,6 +269,53 @@ fn validate_user_command_refresh(
         }
         Ok(())
     }
+}
+
+fn validate_single_select_trigger(
+    commands: &FxHashMap<String, UserCommand>,
+    _ctx: &(),
+) -> garde::Result {
+    let select_count = commands
+        .values()
+        .filter(|c| matches!(c.trigger, UserCommandTrigger::Select))
+        .count();
+    if select_count > 1 {
+        return Err(garde::Error::new(
+            "at most one command can use trigger = \"select\"",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_user_command_trigger(
+    command_type: &UserCommandType,
+    refresh: bool,
+) -> impl FnOnce(&UserCommandTrigger, &()) -> garde::Result + '_ {
+    move |trigger, _| {
+        if matches!(trigger, UserCommandTrigger::Select) {
+            if !matches!(command_type, UserCommandType::Silent) {
+                return Err(garde::Error::new(
+                    "trigger = \"select\" requires type = \"silent\"",
+                ));
+            }
+            if refresh {
+                // A refresh recreates the app, reselects the same commit,
+                // and would fire the hook again: an unbounded loop.
+                return Err(garde::Error::new(
+                    "trigger = \"select\" cannot use refresh = true",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UserCommandTrigger {
+    #[default]
+    Keybind,
+    Select,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
@@ -467,9 +525,11 @@ mod tests {
                                 "{{target_hash}}".into(),
                             ],
                             refresh: false,
+                            trigger: UserCommandTrigger::Keybind,
                         },
                     )]),
                     tab_width: 4,
+                    on_select_debounce_ms: 120,
                 },
                 external: CoreExternalConfig {
                     clipboard: ClipboardConfig::Auto,
@@ -596,6 +656,7 @@ mod tests {
                                     "{{target_hash}}".into(),
                                 ],
                                 refresh: false,
+                                trigger: UserCommandTrigger::Keybind,
                             },
                         ),
                         (
@@ -605,6 +666,7 @@ mod tests {
                                 r#type: UserCommandType::Silent,
                                 commands: vec!["echo".into(), "hello".into()],
                                 refresh: true,
+                                trigger: UserCommandTrigger::Keybind,
                             },
                         ),
                         (
@@ -614,6 +676,7 @@ mod tests {
                                 r#type: UserCommandType::Suspend,
                                 commands: vec!["vim".into()],
                                 refresh: false,
+                                trigger: UserCommandTrigger::Keybind,
                             },
                         ),
                         (
@@ -623,10 +686,12 @@ mod tests {
                                 r#type: UserCommandType::Inline,
                                 commands: vec!["echo".into(), "world".into()],
                                 refresh: false,
+                                trigger: UserCommandTrigger::Keybind,
                             },
                         ),
                     ]),
                     tab_width: 2,
+                    on_select_debounce_ms: 120,
                 },
                 external: CoreExternalConfig {
                     clipboard: ClipboardConfig::Auto,
@@ -709,9 +774,11 @@ mod tests {
                                 "{{target_hash}}".into(),
                             ],
                             refresh: false,
+                            trigger: UserCommandTrigger::Keybind,
                         },
                     )]),
                     tab_width: 4,
+                    on_select_debounce_ms: 120,
                 },
                 external: CoreExternalConfig {
                     clipboard: ClipboardConfig::Auto,
