@@ -34,7 +34,11 @@ pub enum CommitType {
     #[default]
     Commit,
     Stash,
+    WorkingTree,
 }
+
+/// Sentinel hash for the synthesized working-tree row; not a git object.
+pub const WORKING_TREE_HASH: &str = "0000000000000000000000000000000000000000";
 
 #[derive(Debug, Default, Clone)]
 pub struct Commit {
@@ -137,6 +141,7 @@ impl Repository {
         }
 
         let commits = merge_stashes_to_commits(commits, stashes);
+        let commits = merge_worktree_to_commits(commits, load_worktree_commit(path));
         let commit_hashes = commits.iter().map(|c| c.commit_hash.clone()).collect();
 
         let (parents_map, children_map) = build_commits_maps(&commits);
@@ -218,7 +223,9 @@ impl Repository {
 
     pub fn commit_detail(&self, commit_hash: &CommitHash) -> (Commit, Vec<FileChange>) {
         let commit = self.commit(commit_hash).unwrap().clone();
-        let changes = if commit.parent_commit_hashes.is_empty() {
+        let changes = if matches!(commit.commit_type, CommitType::WorkingTree) {
+            get_worktree_diff_summary(&self.path)
+        } else if commit.parent_commit_hashes.is_empty() {
             get_initial_commit_additions(&self.path, commit_hash)
         } else {
             get_diff_summary(&self.path, commit_hash)
@@ -423,6 +430,68 @@ fn to_commit_map(commits: Vec<Commit>) -> CommitMap {
         .into_iter()
         .map(|commit| (commit.commit_hash.clone(), commit))
         .collect()
+}
+
+/// A virtual row for uncommitted changes, parented on HEAD so the graph
+/// draws it like a stash. None when the working tree is clean.
+fn load_worktree_commit(path: &Path) -> Option<Commit> {
+    let status = Command::new("git")
+        .arg("status")
+        .arg("--porcelain")
+        .current_dir(path)
+        .output()
+        .ok()?;
+    if !status.status.success() || status.stdout.is_empty() {
+        return None;
+    }
+    let (mut changed, mut untracked) = (0u32, 0u32);
+    for line in status.stdout.split(|b| *b == b'\n') {
+        match line {
+            [] => {}
+            [b'?', b'?', ..] => untracked += 1,
+            _ => changed += 1,
+        }
+    }
+    let head = Command::new("git")
+        .arg("rev-parse")
+        .arg("HEAD")
+        .current_dir(path)
+        .output()
+        .ok()?;
+    if !head.status.success() {
+        return None;
+    }
+    let head_hash: CommitHash = String::from_utf8_lossy(&head.stdout).trim().into();
+    let now = chrono::Local::now().fixed_offset();
+    Some(Commit {
+        commit_hash: WORKING_TREE_HASH.into(),
+        author_date: now,
+        committer_date: now,
+        subject: format!("// WIP  \u{00b1}{} +{}", changed, untracked),
+        parent_commit_hashes: vec![head_hash],
+        commit_type: CommitType::WorkingTree,
+        ..Default::default()
+    })
+}
+
+fn merge_worktree_to_commits(mut commits: Vec<Commit>, worktree: Option<Commit>) -> Vec<Commit> {
+    let Some(worktree) = worktree else {
+        return commits;
+    };
+    let head = &worktree.parent_commit_hashes[0];
+    let Some(mut pos) = commits.iter().position(|c| c.commit_hash == *head) else {
+        return commits;
+    };
+    // Above HEAD and above HEAD's stash rows: the newest thing in the repo
+    // sits at the very top, like GitKraken's WIP row.
+    while pos > 0
+        && matches!(commits[pos - 1].commit_type, CommitType::Stash)
+        && commits[pos - 1].parent_commit_hashes.first() == Some(head)
+    {
+        pos -= 1;
+    }
+    commits.insert(pos, worktree);
+    commits
 }
 
 fn merge_stashes_to_commits(commits: Vec<Commit>, stashes: Vec<Commit>) -> Vec<Commit> {
@@ -662,6 +731,46 @@ pub fn get_diff_summary(path: &Path, commit_hash: &CommitHash) -> Vec<FileChange
 
     cmd.wait().unwrap();
 
+    changes
+}
+
+pub fn get_worktree_diff_summary(path: &Path) -> Vec<FileChange> {
+    let mut changes = Vec::new();
+    if let Ok(out) = Command::new("git")
+        .arg("diff")
+        .arg("--name-status")
+        .arg("HEAD")
+        .current_dir(path)
+        .output()
+    {
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() < 2 {
+                continue;
+            }
+            match &parts[0][0..1] {
+                "A" => changes.push(FileChange::Add { path: parts[1].into() }),
+                "M" => changes.push(FileChange::Modify { path: parts[1].into() }),
+                "D" => changes.push(FileChange::Delete { path: parts[1].into() }),
+                "R" if parts.len() > 2 => changes.push(FileChange::Move {
+                    from: parts[1].into(),
+                    to: parts[2].into(),
+                }),
+                _ => {}
+            }
+        }
+    }
+    if let Ok(out) = Command::new("git")
+        .arg("ls-files")
+        .arg("--others")
+        .arg("--exclude-standard")
+        .current_dir(path)
+        .output()
+    {
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            changes.push(FileChange::Add { path: line.into() });
+        }
+    }
     changes
 }
 
