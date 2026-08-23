@@ -1249,6 +1249,7 @@ mod tests {
             FxHashMap::default(),
             Head::None,
             commit_hashes,
+            FxHashMap::default(),
         );
         let graph = calc_graph(&repository);
         let graph_color_set = GraphColorSet::new(&GraphColorConfig::default());
