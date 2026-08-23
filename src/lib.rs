@@ -313,10 +313,7 @@ pub fn run() -> Result<()> {
     };
 
     if ctx.ui_config.common.mouse {
-        let _ = ratatui::crossterm::execute!(
-            std::io::stdout(),
-            ratatui::crossterm::event::DisableMouseCapture
-        );
+        event::disable_click_reporting();
     }
     ratatui::restore();
     ret.map_err(Into::into)
