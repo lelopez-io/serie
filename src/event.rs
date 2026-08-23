@@ -33,6 +33,7 @@ pub enum AppEvent {
     SelectParentCommit,
     CopyToClipboard { name: String, value: String },
     Refresh(RefreshViewContext),
+    WorktreeStatusChanged,
     ClearStatusLine,
     UpdateStatusInput(String, Option<u16>, Option<String>),
     NotifyInfo(String),

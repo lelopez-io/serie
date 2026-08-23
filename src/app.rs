@@ -264,6 +264,12 @@ impl App<'_> {
                 AppEvent::CopyToClipboard { name, value } => {
                     self.copy_to_clipboard(name, value);
                 }
+                AppEvent::WorktreeStatusChanged => {
+                    // The status watcher saw the working tree change:
+                    // re-run the active view's own refresh path, which
+                    // preserves selection and search state.
+                    self.view.refresh();
+                }
                 AppEvent::Refresh(context) => {
                     self.cleanup_graph_images()?;
                     let request = RefreshRequest { context };
