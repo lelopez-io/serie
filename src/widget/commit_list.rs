@@ -426,6 +426,17 @@ impl<'a> CommitListState<'a> {
         self.select_prev_match_index(self.current_selected_index());
     }
 
+    /// Select the row at a zero-based position inside the visible
+    /// window; false when the position is past the last commit.
+    pub fn select_visible_row(&mut self, row: usize) -> bool {
+        let index = self.offset + row;
+        if index >= self.commits.len() || row >= self.height {
+            return false;
+        }
+        self.selected = row;
+        true
+    }
+
     pub fn selected_commit_hash(&self) -> &CommitHash {
         &self.commits[self.current_selected_index()]
             .commit
