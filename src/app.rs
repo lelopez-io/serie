@@ -299,7 +299,7 @@ impl App<'_> {
 
     fn prepare_render(&mut self, terminal: &mut DefaultTerminal) -> Result<(), std::io::Error> {
         let area: Rect = terminal.size()?.into();
-        let [view_area, _, _] = split_app_areas(area);
+        let [view_area, _] = split_app_areas(area);
         self.update_state(view_area);
         self.view.update_layout(view_area);
         self.view.prepare_graph_uploads();
@@ -330,21 +330,28 @@ impl App<'_> {
             .bg(self.ctx.color_theme.bg);
         f.render_widget(base, f.area());
 
-        let [view_area, meta_line_area, status_line_area] = split_app_areas(f.area());
+        let [view_area, status_line_area] = split_app_areas(f.area());
 
         self.update_state(view_area);
 
         self.view.render(f, view_area);
-        self.render_meta_line(f, meta_line_area);
         self.render_status_line(f, status_line_area);
     }
 }
 
 impl App<'_> {
-    // Selected-commit metadata lives here, not in list columns, so the
-    // rows keep their width for the subject. The fixed "hash  date"
-    // shape is also what serie-follow parses to drive the hunk pane.
-    fn render_meta_line(&self, f: &mut Frame, area: Rect) {
+    // Selected-commit metadata shares the status row, right-aligned
+    // under the status line's own rule, so the list rows keep their
+    // width for the subject and the footer needs no divider of its
+    // own. The fixed "hash  date" shape is what serie-follow parses to
+    // drive the hunk pane, so it stays put next to status messages;
+    // it yields only to status input (the cursor owns the row, and the
+    // selection cannot move mid-input anyway) and to messages wide
+    // enough to reach it.
+    fn render_meta_line(&self, f: &mut Frame, area: Rect, status_width: usize) {
+        if matches!(self.app_status.status_line, StatusLine::Input(..)) {
+            return;
+        }
         let Some(hash) = self.view.selected_commit_hash() else {
             return;
         };
@@ -369,18 +376,10 @@ impl App<'_> {
                 .as_str()
                 .fg(self.ctx.color_theme.detail_name_fg),
         ]);
-        // Right-aligned so the metadata anchors the row's end, clear of
-        // the graph lane; the top border is the hr separating it from
-        // the list, styled like the status line's.
-        let paragraph = Paragraph::new(line)
-            .alignment(Alignment::Right)
-            .block(
-                Block::default()
-                    .borders(Borders::TOP)
-                    .style(Style::default().fg(self.ctx.color_theme.divider_fg))
-                    .padding(Padding::horizontal(1)),
-            );
-        f.render_widget(paragraph, area);
+        if status_width + line.width() + 2 > area.width as usize {
+            return; // a wide status message owns the row this frame
+        }
+        f.render_widget(Paragraph::new(line).alignment(Alignment::Right), area);
     }
 
     fn render_status_line(&self, f: &mut Frame, area: Rect) {
@@ -422,6 +421,7 @@ impl App<'_> {
                 .add_modifier(Modifier::BOLD)
                 .fg(self.ctx.color_theme.status_error_fg),
         };
+        let status_width = text.width();
         let paragraph = Paragraph::new(text).block(
             Block::default()
                 .borders(Borders::TOP)
@@ -429,6 +429,14 @@ impl App<'_> {
                 .padding(Padding::horizontal(1)),
         );
         f.render_widget(paragraph, area);
+
+        let inner = Rect {
+            x: area.x + 1,
+            y: area.y + 1,
+            width: area.width.saturating_sub(2),
+            height: 1,
+        };
+        self.render_meta_line(f, inner, status_width);
 
         if let StatusLine::Input(_, Some(cursor_pos), _) = &self.app_status.status_line {
             let (x, y) = (area.x + cursor_pos + 1, area.y + 1);
@@ -445,13 +453,8 @@ impl App<'_> {
     }
 }
 
-fn split_app_areas(area: Rect) -> [Rect; 3] {
-    Layout::vertical([
-        Constraint::Min(0),
-        Constraint::Length(2), // meta line: hr + content
-        Constraint::Length(2),
-    ])
-    .areas(area)
+fn split_app_areas(area: Rect) -> [Rect; 2] {
+    Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(area)
 }
 
 impl App<'_> {
