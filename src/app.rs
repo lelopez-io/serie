@@ -399,11 +399,6 @@ impl App<'_> {
             .format("%Y-%m-%d %H:%M");
         let line = Line::from(vec![
             "\u{2299} ".fg(self.ctx.color_theme.divider_fg),
-            commit
-                .commit_hash
-                .as_short_hash()
-                .fg(self.ctx.color_theme.detail_hash_fg),
-            "  ".into(),
             format!("{date}").fg(self.ctx.color_theme.detail_date_fg),
             "  ".into(),
             commit
