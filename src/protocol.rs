@@ -28,6 +28,8 @@ fn detect_kitty_graphics_protocol() -> bool {
     // https://ghostty.org/docs/help/terminfo
     || env::var("TERM").ok().is_some_and(|t| t == "xterm-ghostty")
     || env::var("GHOSTTY_RESOURCES_DIR").is_ok()
+    // herdr panes hide the host TERM; the server advertises its relay instead
+    || env::var("HERDR_IMAGE_PROTOCOL").ok().is_some_and(|p| p == "kitty")
 }
 
 pub fn detect_tmux() -> bool {
