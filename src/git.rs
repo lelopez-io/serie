@@ -496,8 +496,9 @@ fn merge_worktree_to_commits(mut commits: Vec<Commit>, worktree: Option<Commit>)
     let Some(mut pos) = commits.iter().position(|c| c.commit_hash == *head) else {
         return commits;
     };
-    // Above HEAD and above HEAD's stash rows: the newest thing in the repo
-    // sits at the very top, like GitKraken's WIP row.
+    // Adjacent to HEAD, not the graph's top: WIP belongs to the checked-out
+    // branch, so a sibling branch with newer commits (a stacked future PR)
+    // renders above it.
     while pos > 0
         && matches!(commits[pos - 1].commit_type, CommitType::Stash)
         && commits[pos - 1].parent_commit_hashes.first() == Some(head)
