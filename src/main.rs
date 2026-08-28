@@ -168,6 +168,85 @@ fn main() -> Result<()> {
 
     let ec = event::EventController::init();
 
+    // Debounced dispatcher for select-triggered user commands: the app
+    // sends (hash, expanded argv) on every committed selection change;
+    // this thread coalesces to the latest, waits for the debounce to
+    // expire, and runs the command off the UI thread. The first message
+    // is the boot selection and only sets the baseline. State lives out
+    // here so app recreations on refresh can never re-fire it.
+    let select_hook_tx = {
+        let configured = ctx
+            .core_config
+            .user_command
+            .commands
+            .values()
+            .any(|c| matches!(c.trigger, config::UserCommandTrigger::Select));
+        if !configured {
+            None
+        } else {
+            let debounce = std::time::Duration::from_millis(
+                ctx.core_config.user_command.on_select_debounce_ms,
+            );
+            let notify = ec.sender();
+            let (tx, rx) = std::sync::mpsc::channel::<(String, Vec<String>)>();
+            std::thread::spawn(move || {
+                use std::sync::mpsc::RecvTimeoutError;
+                let mut last_fired: Option<String> = None;
+                let mut pending: Option<(String, Vec<String>)> = None;
+                let mut seeded = false;
+                loop {
+                    let msg = if pending.is_some() {
+                        match rx.recv_timeout(debounce) {
+                            Ok(m) => Some(m),
+                            Err(RecvTimeoutError::Timeout) => None,
+                            Err(RecvTimeoutError::Disconnected) => break,
+                        }
+                    } else {
+                        match rx.recv() {
+                            Ok(m) => Some(m),
+                            Err(_) => break,
+                        }
+                    };
+                    match msg {
+                        Some(m) if !seeded => {
+                            seeded = true;
+                            last_fired = Some(m.0);
+                        }
+                        Some(m) => pending = Some(m),
+                        None => {
+                            let Some((hash, argv)) = pending.take() else {
+                                continue;
+                            };
+                            if last_fired.as_deref() == Some(hash.as_str()) {
+                                continue;
+                            }
+                            match std::process::Command::new(&argv[0])
+                                .args(&argv[1..])
+                                .output()
+                            {
+                                Ok(out) if out.status.success() => {
+                                    last_fired = Some(hash);
+                                }
+                                Ok(out) => {
+                                    notify.send(event::AppEvent::NotifyError(format!(
+                                        "on-select command exited with {}: {}",
+                                        out.status,
+                                        String::from_utf8_lossy(&out.stderr).trim()
+                                    )));
+                                }
+                                Err(e) => {
+                                    notify.send(event::AppEvent::NotifyError(format!(
+                                        "on-select command failed: {e}"
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            Some(tx)
+        }
+    };
     // Poll the working tree so the WIP row tracks edits without manual
     // refresh, firing only when `git status --porcelain` output changes.
     // Repaints produce no terminal input, so input-driven consumers of
@@ -223,6 +302,7 @@ fn main() -> Result<()> {
             ctx.clone(),
             &ec,
             refresh_view_context,
+            select_hook_tx.clone(),
         );
 
         match app.run(terminal.as_mut().unwrap()) {

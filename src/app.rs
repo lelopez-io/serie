@@ -15,12 +15,13 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     color::{ColorTheme, GraphColorSet},
-    config::{CoreConfig, CursorType, UiConfig, UserCommand, UserCommandType},
+    config::{CoreConfig, CursorType, UiConfig, UserCommand, UserCommandTrigger, UserCommandType},
     event::{AppEvent, EventController, UserEvent, UserEventWithCount},
     external::{
-        copy_to_clipboard, exec_user_command, exec_user_command_suspend, ExternalCommandParameters,
+        copy_to_clipboard, exec_user_command, exec_user_command_suspend, expand_user_command,
+        ExternalCommandParameters,
     },
-    git::{Commit, FileChange, Head, Ref, Repository},
+    git::{Commit, CommitHash, FileChange, Head, Ref, Repository},
     graph::{CellWidthType, Graph, GraphImageManager},
     keybind::KeyBind,
     protocol::ImageProtocol,
@@ -70,6 +71,8 @@ struct AppStatus {
     view_area: Rect,
 }
 
+pub type SelectionHookSender = std::sync::mpsc::Sender<(String, Vec<String>)>;
+
 #[derive(Debug)]
 pub struct App<'a> {
     repository: &'a Repository,
@@ -77,6 +80,8 @@ pub struct App<'a> {
     app_status: AppStatus,
     ctx: Rc<AppContext>,
     ec: &'a EventController,
+    hook_tx: Option<SelectionHookSender>,
+    hook_last_seen: Option<CommitHash>,
     diff_stats: FxHashMap<String, Option<(u64, u64)>>,
     diff_stats_pending: FxHashSet<String>,
 }
@@ -92,6 +97,7 @@ impl<'a> App<'a> {
         ctx: Rc<AppContext>,
         ec: &'a EventController,
         refresh_view_context: Option<RefreshViewContext>,
+        hook_tx: Option<SelectionHookSender>,
     ) -> Self {
         let mut ref_name_to_commit_index_map = FxHashMap::default();
         let commits = graph
@@ -137,6 +143,8 @@ impl<'a> App<'a> {
             app_status: AppStatus::default(),
             ctx,
             ec,
+            hook_tx,
+            hook_last_seen: None,
             diff_stats: FxHashMap::default(),
             diff_stats_pending: FxHashSet::default(),
         };
@@ -336,10 +344,46 @@ impl App<'_> {
         let area: Rect = terminal.size()?.into();
         let [view_area, _] = split_app_areas(area);
         self.update_state(view_area);
+        self.notify_selection_hook();
         self.request_diff_stats();
         self.view.update_layout(view_area);
         self.view.prepare_graph_uploads();
         Ok(())
+    }
+
+    // When a select-triggered command is configured, hand every committed
+    // selection change to the dispatcher thread: argv is expanded here,
+    // where the ctx and repository borrows are valid, and executed there,
+    // so a slow command never blocks the UI.
+    fn notify_selection_hook(&mut self) {
+        let Some(tx) = self.hook_tx.clone() else {
+            return;
+        };
+        let Some(hash) = self.view.selected_commit_hash().cloned() else {
+            return;
+        };
+        if self.hook_last_seen.as_ref() == Some(&hash) {
+            return;
+        }
+        self.hook_last_seen = Some(hash.clone());
+        let Some(user_command) = select_triggered_command(&self.ctx) else {
+            return;
+        };
+        let Some(commit) = self.repository.commit(&hash) else {
+            return;
+        };
+        let refs: Vec<Ref> = self.repository.refs(&hash).into_iter().cloned().collect();
+        let params = build_external_command_parameters_for(
+            &user_command.commands,
+            commit,
+            &refs,
+            self.app_status.view_area,
+            &self.ctx,
+        );
+        if let Ok(params) = params {
+            let argv = expand_user_command(&params);
+            let _ = tx.send((hash.as_str().to_string(), argv));
+        }
     }
 
     fn flush_pending_graph_uploads(&mut self) -> Result<(), std::io::Error> {
@@ -858,6 +902,14 @@ fn extract_user_command_refresh_by_number(user_command_number: usize, ctx: &AppC
         .unwrap_or_default()
 }
 
+fn select_triggered_command(ctx: &AppContext) -> Option<&UserCommand> {
+    ctx.core_config
+        .user_command
+        .commands
+        .values()
+        .find(|c| matches!(c.trigger, UserCommandTrigger::Select))
+}
+
 fn build_external_command_parameters_and_exec_command(
     commit: &Commit,
     refs: &[Ref],
@@ -877,6 +929,16 @@ fn build_external_command_parameters<'a>(
     ctx: &'a AppContext,
 ) -> Result<ExternalCommandParameters<'a>, String> {
     let command = &extract_user_command_by_number(user_command_number, ctx)?.commands;
+    build_external_command_parameters_for(command, commit, refs, view_area, ctx)
+}
+
+fn build_external_command_parameters_for<'a>(
+    command: &'a [String],
+    commit: &'a Commit,
+    refs: &'a [Ref],
+    view_area: Rect,
+    ctx: &'a AppContext,
+) -> Result<ExternalCommandParameters<'a>, String> {
     let target_hash = commit.commit_hash.as_str();
     let parent_hashes = commit
         .parent_commit_hashes

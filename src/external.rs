@@ -120,6 +120,12 @@ pub fn exec_user_command_suspend(params: ExternalCommandParameters) -> Result<()
     Ok(())
 }
 
+/// Owned, fully expanded argv for callers that must execute off the UI
+/// thread (the borrows in the parameters cannot cross threads).
+pub fn expand_user_command(params: &ExternalCommandParameters) -> Vec<String> {
+    build_user_command(params)
+}
+
 fn build_user_command(params: &ExternalCommandParameters) -> Vec<String> {
     fn to_vec(ss: &[&str]) -> Vec<String> {
         ss.iter().map(|s| s.to_string()).collect()

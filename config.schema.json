@@ -100,6 +100,12 @@
               "type": "integer",
               "description": "The number of spaces to replace tabs in the user command output.",
               "default": 4
+            },
+            "on_select_debounce_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 120,
+              "description": "Quiet time after a selection change before a select-triggered command runs."
             }
           },
           "patternProperties": {
@@ -132,6 +138,15 @@
                   "type": "boolean",
                   "description": "Whether to reload the repository and refresh the display after executing the command. Available for 'silent' and 'suspend' commands.",
                   "default": false
+                },
+                "trigger": {
+                  "type": "string",
+                  "enum": [
+                    "keybind",
+                    "select"
+                  ],
+                  "default": "keybind",
+                  "description": "When the command runs: on its keybind, or automatically (debounced) when the selected commit changes. select requires type = silent."
                 }
               },
               "required": [
