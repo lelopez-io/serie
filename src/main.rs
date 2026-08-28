@@ -167,6 +167,29 @@ fn main() -> Result<()> {
     });
 
     let ec = event::EventController::init();
+
+    // Poll the working tree so the WIP row tracks edits without manual
+    // refresh, firing only when `git status --porcelain` output changes.
+    // Repaints produce no terminal input, so input-driven consumers of
+    // the rendered graph (serie-follow) are never triggered by this.
+    {
+        let tx = ec.sender();
+        std::thread::spawn(move || {
+            let mut last: Option<u64> = None;
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(1000));
+                let sig = worktree_signature();
+                if let (Some(prev), Some(cur)) = (last, sig) {
+                    if prev != cur {
+                        tx.send(event::AppEvent::WorktreeStatusChanged);
+                    }
+                }
+                if sig.is_some() {
+                    last = sig;
+                }
+            }
+        });
+    }
     let mut refresh_view_context = None;
     let mut terminal = None;
 
@@ -218,4 +241,18 @@ fn main() -> Result<()> {
 
     ratatui::restore();
     ret.map_err(Into::into)
+}
+
+fn worktree_signature() -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let out = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    out.stdout.hash(&mut h);
+    Some(h.finish())
 }

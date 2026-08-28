@@ -5,13 +5,13 @@ use std::{
 
 use ratatui::{
     crossterm::event::{KeyCode, KeyEvent},
-    layout::{Constraint, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style, Stylize},
     text::Line,
     widgets::{Block, Borders, Padding, Paragraph},
     DefaultTerminal, Frame,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     color::{ColorTheme, GraphColorSet},
@@ -77,6 +77,8 @@ pub struct App<'a> {
     app_status: AppStatus,
     ctx: Rc<AppContext>,
     ec: &'a EventController,
+    diff_stats: FxHashMap<String, Option<(u64, u64)>>,
+    diff_stats_pending: FxHashSet<String>,
 }
 
 impl<'a> App<'a> {
@@ -135,6 +137,8 @@ impl<'a> App<'a> {
             app_status: AppStatus::default(),
             ctx,
             ec,
+            diff_stats: FxHashMap::default(),
+            diff_stats_pending: FxHashSet::default(),
         };
 
         if let Some(context) = refresh_view_context {
@@ -264,6 +268,16 @@ impl App<'_> {
                 AppEvent::CopyToClipboard { name, value } => {
                     self.copy_to_clipboard(name, value);
                 }
+                AppEvent::DiffStatsLoaded(hash, stats) => {
+                    self.diff_stats_pending.remove(&hash);
+                    self.diff_stats.insert(hash, stats);
+                }
+                AppEvent::WorktreeStatusChanged => {
+                    // The status watcher saw the working tree change:
+                    // re-run the active view's own refresh path, which
+                    // preserves selection and search state.
+                    self.view.refresh();
+                }
                 AppEvent::Refresh(context) => {
                     self.cleanup_graph_images()?;
                     let request = RefreshRequest { context };
@@ -291,10 +305,38 @@ impl App<'_> {
         }
     }
 
+    // Line totals for the status-row metadata are computed off-thread
+    // and cached per hash: a git call per selected commit, never on the
+    // render path, so fast scrolling stays smooth.
+    fn request_diff_stats(&mut self) {
+        let Some(hash) = self.view.selected_commit_hash() else {
+            return;
+        };
+        if self.repository.line_stats(hash).is_some() {
+            return;
+        }
+        let key = hash.as_str().to_string();
+        if self.diff_stats.contains_key(&key) || self.diff_stats_pending.contains(&key) {
+            return;
+        }
+        let Some(commit) = self.repository.commit(hash) else {
+            return;
+        };
+        self.diff_stats_pending.insert(key.clone());
+        let commit = commit.clone();
+        let path = self.repository.path().to_path_buf();
+        let tx = self.ec.sender();
+        std::thread::spawn(move || {
+            let stats = crate::git::diff_line_stats(&path, &commit);
+            tx.send(AppEvent::DiffStatsLoaded(key, stats));
+        });
+    }
+
     fn prepare_render(&mut self, terminal: &mut DefaultTerminal) -> Result<(), std::io::Error> {
         let area: Rect = terminal.size()?.into();
         let [view_area, _] = split_app_areas(area);
         self.update_state(view_area);
+        self.request_diff_stats();
         self.view.update_layout(view_area);
         self.view.prepare_graph_uploads();
         Ok(())
@@ -334,6 +376,57 @@ impl App<'_> {
 }
 
 impl App<'_> {
+    // Selected-commit metadata shares the status row, right-aligned
+    // under the status line's own rule, so the list rows keep their
+    // width for the subject and the footer needs no divider of its
+    // own. It yields only to status input (the cursor owns the row, and
+    // the selection cannot move mid-input anyway) and to messages wide
+    // enough to reach it. Line totals appear once their async
+    // computation lands in the cache.
+    fn render_meta_line(&self, f: &mut Frame, area: Rect, status_width: usize) {
+        if matches!(self.app_status.status_line, StatusLine::Input(..)) {
+            return;
+        }
+        let Some(hash) = self.view.selected_commit_hash() else {
+            return;
+        };
+        let Some(commit) = self.repository.commit(hash) else {
+            return;
+        };
+        let date = commit
+            .committer_date
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M");
+        let line = Line::from(vec![
+            "\u{2299} ".fg(self.ctx.color_theme.divider_fg),
+            format!("{date}").fg(self.ctx.color_theme.detail_date_fg),
+            "  ".into(),
+            commit
+                .author_name
+                .as_str()
+                .fg(self.ctx.color_theme.detail_name_fg),
+        ]);
+        let mut line = line;
+        let stats = self
+            .repository
+            .line_stats(hash)
+            .or_else(|| self.diff_stats.get(hash.as_str()).copied().flatten());
+        if let Some((ins, del)) = stats {
+            line.push_span(ratatui::text::Span::raw("  "));
+            line.push_span(
+                format!("+{ins}").fg(self.ctx.color_theme.detail_file_change_add_fg),
+            );
+            line.push_span(ratatui::text::Span::raw(" "));
+            line.push_span(
+                format!("-{del}").fg(self.ctx.color_theme.detail_file_change_delete_fg),
+            );
+        }
+        if status_width + line.width() + 2 > area.width as usize {
+            return; // a wide status message owns the row this frame
+        }
+        f.render_widget(Paragraph::new(line).alignment(Alignment::Right), area);
+    }
+
     fn render_status_line(&self, f: &mut Frame, area: Rect) {
         let text: Line = match &self.app_status.status_line {
             StatusLine::None => {
@@ -373,6 +466,7 @@ impl App<'_> {
                 .add_modifier(Modifier::BOLD)
                 .fg(self.ctx.color_theme.status_error_fg),
         };
+        let status_width = text.width();
         let paragraph = Paragraph::new(text).block(
             Block::default()
                 .borders(Borders::TOP)
@@ -380,6 +474,14 @@ impl App<'_> {
                 .padding(Padding::horizontal(1)),
         );
         f.render_widget(paragraph, area);
+
+        let inner = Rect {
+            x: area.x + 1,
+            y: area.y + 1,
+            width: area.width.saturating_sub(2),
+            height: 1,
+        };
+        self.render_meta_line(f, inner, status_width);
 
         if let StatusLine::Input(_, Some(cursor_pos), _) = &self.app_status.status_line {
             let (x, y) = (area.x + cursor_pos + 1, area.y + 1);
