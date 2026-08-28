@@ -4,6 +4,15 @@ use crate::git::{self, Repository};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+// The worktree row is synthesized ahead of real commits, so tests reach
+// past it for the commit under assertion.
+fn first_real_commit<'a>(commits: &'a [&'a git::Commit]) -> &'a git::Commit {
+    commits
+        .iter()
+        .find(|c| !matches!(c.commit_type, git::CommitType::WorkingTree))
+        .unwrap()
+}
+
 // The identity actually recorded in the commits.
 const RAW_AUTHOR_NAME: &str = "Old Author";
 const RAW_AUTHOR_EMAIL: &str = "old-author@example.com";
@@ -28,7 +37,7 @@ fn mailmap_enabled_rewrites_author_and_committer() -> TestResult {
 
     let repository = Repository::load(repo_path, git::SortCommit::Chronological, None, true)?;
     let commits = repository.all_commits();
-    let commit = commits.first().unwrap();
+    let commit = first_real_commit(&commits);
 
     assert_eq!(commit.author_name, MAPPED_AUTHOR_NAME);
     assert_eq!(commit.author_email, MAPPED_AUTHOR_EMAIL);
@@ -50,7 +59,7 @@ fn mailmap_disabled_keeps_raw_identity() -> TestResult {
 
     let repository = Repository::load(repo_path, git::SortCommit::Chronological, None, false)?;
     let commits = repository.all_commits();
-    let commit = commits.first().unwrap();
+    let commit = first_real_commit(&commits);
 
     assert_eq!(commit.author_name, RAW_AUTHOR_NAME);
     assert_eq!(commit.author_email, RAW_AUTHOR_EMAIL);
@@ -71,7 +80,7 @@ fn mailmap_enabled_without_mailmap_file_is_a_no_op() -> TestResult {
 
     let repository = Repository::load(repo_path, git::SortCommit::Chronological, None, true)?;
     let commits = repository.all_commits();
-    let commit = commits.first().unwrap();
+    let commit = first_real_commit(&commits);
 
     assert_eq!(commit.author_name, RAW_AUTHOR_NAME);
     assert_eq!(commit.author_email, RAW_AUTHOR_EMAIL);
