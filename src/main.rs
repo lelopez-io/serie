@@ -166,7 +166,7 @@ fn main() -> Result<()> {
         image_protocol,
     });
 
-    let ec = event::EventController::init();
+    let ec = event::EventController::init(ctx.ui_config.common.mouse);
 
     // Debounced dispatcher for select-triggered user commands: the app
     // sends (hash, expanded argv) on every committed selection change;
@@ -269,7 +269,6 @@ fn main() -> Result<()> {
             }
         });
     }
-    let ec = event::EventController::init(ctx.ui_config.common.mouse);
 
     let mut refresh_view_context = None;
     let mut terminal = None;
