@@ -19,6 +19,7 @@ use crate::view::RefreshViewContext;
 pub enum AppEvent {
     Key(KeyEvent),
     Resize(usize, usize),
+    Mouse(ratatui::crossterm::event::MouseEvent),
     Quit,
     OpenDetail,
     CloseDetail,
@@ -76,16 +77,34 @@ impl Debug for Receiver {
     }
 }
 
+// Mode 1000 (clicks and wheel) plus 1006 (SGR encoding) only — never
+// 1002/1003, so drags are not reported and a surrounding multiplexer
+// keeps its own drag-selection (and clipboard forwarding) intact.
+pub fn enable_click_reporting() {
+    use std::io::Write;
+    let mut out = std::io::stdout();
+    let _ = out.write_all(b"\x1b[?1000h\x1b[?1006h");
+    let _ = out.flush();
+}
+
+pub fn disable_click_reporting() {
+    use std::io::Write;
+    let mut out = std::io::stdout();
+    let _ = out.write_all(b"\x1b[?1006l\x1b[?1000l");
+    let _ = out.flush();
+}
+
 #[derive(Debug)]
 pub struct EventController {
     tx: Sender,
     rx: Receiver,
     stop: Arc<AtomicBool>,
     handle: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
+    mouse: bool,
 }
 
 impl EventController {
-    pub fn init() -> Self {
+    pub fn init(mouse: bool) -> Self {
         let (tx, rx) = mpsc::channel();
         let tx = Sender { tx };
         let rx = Receiver { rx };
@@ -95,7 +114,11 @@ impl EventController {
             rx,
             stop: Arc::new(AtomicBool::new(false)),
             handle: Arc::new(Mutex::new(None)),
+            mouse,
         };
+        if mouse {
+            enable_click_reporting();
+        }
         controller.start();
 
         controller
@@ -117,6 +140,9 @@ impl EventController {
                         }
                         ratatui::crossterm::event::Event::Resize(w, h) => {
                             tx.send(AppEvent::Resize(w as usize, h as usize));
+                        }
+                        ratatui::crossterm::event::Event::Mouse(m) => {
+                            tx.send(AppEvent::Mouse(m));
                         }
                         _ => {}
                     },
@@ -142,6 +168,9 @@ impl EventController {
         )
         .unwrap();
         ratatui::crossterm::terminal::enable_raw_mode().unwrap();
+        if self.mouse {
+            enable_click_reporting();
+        }
 
         self.drain_crossterm_event();
         self.start();
@@ -149,6 +178,9 @@ impl EventController {
 
     pub fn suspend(&self) {
         self.stop();
+        if self.mouse {
+            disable_click_reporting();
+        }
 
         ratatui::crossterm::terminal::disable_raw_mode().unwrap();
         ratatui::crossterm::execute!(
