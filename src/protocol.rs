@@ -12,6 +12,11 @@ pub fn auto_detect() -> ImageProtocol {
     if detect_kitty_graphics_protocol() {
         if detect_tmux() {
             ImageProtocol::KittyUnicode { tmux: true }
+        } else if detect_herdr() {
+            // herdr relays like a multiplexer: direct placement is cleared and
+            // re-sent every scroll, while placeholders upload once. Not tmux,
+            // so no passthrough wrapping.
+            ImageProtocol::KittyUnicode { tmux: false }
         } else {
             ImageProtocol::Kitty
         }
@@ -29,7 +34,13 @@ fn detect_kitty_graphics_protocol() -> bool {
     || env::var("TERM").ok().is_some_and(|t| t == "xterm-ghostty")
     || env::var("GHOSTTY_RESOURCES_DIR").is_ok()
     // herdr panes hide the host TERM; the server advertises its relay instead
-    || env::var("HERDR_IMAGE_PROTOCOL").ok().is_some_and(|p| p == "kitty")
+    || detect_herdr()
+}
+
+fn detect_herdr() -> bool {
+    env::var("HERDR_IMAGE_PROTOCOL")
+        .ok()
+        .is_some_and(|p| p == "kitty")
 }
 
 pub fn detect_tmux() -> bool {
@@ -595,5 +606,57 @@ fn passthrough_escapes(tmux: bool) -> (&'static str, &'static str, &'static str)
         ("\x1bPtmux;", "\x1b\x1b", "\x1b\\")
     } else {
         ("", "\x1b", "")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VARS: [&str; 6] = [
+        "KITTY_WINDOW_ID",
+        "GHOSTTY_RESOURCES_DIR",
+        "HERDR_IMAGE_PROTOCOL",
+        "TMUX",
+        "TERM",
+        "TERM_PROGRAM",
+    ];
+
+    // One test, not three: these all read the same process-wide env.
+    #[test]
+    fn auto_detect_selects_by_terminal_and_multiplexer() {
+        let saved: Vec<_> = VARS.iter().map(|k| (*k, env::var(k).ok())).collect();
+        for k in VARS {
+            env::remove_var(k);
+        }
+
+        env::set_var("TERM", "xterm-256color");
+        env::set_var("HERDR_IMAGE_PROTOCOL", "kitty");
+        assert!(matches!(
+            auto_detect(),
+            ImageProtocol::KittyUnicode { tmux: false }
+        ));
+
+        env::remove_var("HERDR_IMAGE_PROTOCOL");
+        env::set_var("KITTY_WINDOW_ID", "1");
+        assert!(matches!(auto_detect(), ImageProtocol::Kitty));
+
+        env::set_var("TMUX", "/tmp/tmux-501/default,1,0");
+        assert!(matches!(
+            auto_detect(),
+            ImageProtocol::KittyUnicode { tmux: true }
+        ));
+
+        for k in VARS {
+            env::remove_var(k);
+        }
+        assert!(matches!(auto_detect(), ImageProtocol::Iterm2));
+
+        for (k, v) in saved {
+            match v {
+                Some(v) => env::set_var(k, v),
+                None => env::remove_var(k),
+            }
+        }
     }
 }
