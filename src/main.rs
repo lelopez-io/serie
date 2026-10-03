@@ -19,6 +19,10 @@ mod graph_tests;
 #[path = "tests/mailmap.rs"]
 mod mailmap_tests;
 
+#[cfg(test)]
+#[path = "tests/range.rs"]
+mod range_tests;
+
 use std::{path::Path, rc::Rc};
 
 use app::{App, Ret};
@@ -53,6 +57,10 @@ struct Args {
     /// Initial selection of commit [default: latest]
     #[arg(short, long, value_name = "TYPE")]
     initial_selection: Option<InitialSelection>,
+
+    /// Only the commits in this revision range, e.g. main..HEAD
+    #[arg(long, value_name = "REVS")]
+    range: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize)]
@@ -274,7 +282,13 @@ fn main() -> Result<()> {
     let mut terminal = None;
 
     let ret = loop {
-        let repository = git::Repository::load(Path::new("."), order, max_count, mailmap)?;
+        let repository = git::Repository::load(
+            Path::new("."),
+            order,
+            max_count,
+            args.range.as_deref(),
+            mailmap,
+        )?;
 
         let graph = graph::calc_graph(&repository);
 

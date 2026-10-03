@@ -35,7 +35,7 @@ fn mailmap_enabled_rewrites_author_and_committer() -> TestResult {
     git.commit("commit");
     write_mailmap(repo_path);
 
-    let repository = Repository::load(repo_path, git::SortCommit::Chronological, None, true)?;
+    let repository = Repository::load(repo_path, git::SortCommit::Chronological, None, None, true)?;
     let commits = repository.all_commits();
     let commit = first_real_commit(&commits);
 
@@ -57,7 +57,8 @@ fn mailmap_disabled_keeps_raw_identity() -> TestResult {
     git.commit("commit");
     write_mailmap(repo_path);
 
-    let repository = Repository::load(repo_path, git::SortCommit::Chronological, None, false)?;
+    let repository =
+        Repository::load(repo_path, git::SortCommit::Chronological, None, None, false)?;
     let commits = repository.all_commits();
     let commit = first_real_commit(&commits);
 
@@ -78,7 +79,7 @@ fn mailmap_enabled_without_mailmap_file_is_a_no_op() -> TestResult {
     git.init();
     git.commit("commit");
 
-    let repository = Repository::load(repo_path, git::SortCommit::Chronological, None, true)?;
+    let repository = Repository::load(repo_path, git::SortCommit::Chronological, None, None, true)?;
     let commits = repository.all_commits();
     let commit = first_real_commit(&commits);
 
