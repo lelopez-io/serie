@@ -130,32 +130,46 @@ pub struct Repository {
 }
 
 impl Repository {
+    /// `range` holds the revisions `git log` walks in place of every
+    /// branch, remote, tag and stash, e.g. `main..HEAD`.
     pub fn load(
         path: &Path,
         sort: SortCommit,
         max_count: Option<usize>,
+        range: Option<&str>,
         mailmap: bool,
     ) -> Result<Self> {
         check_git_repository(path)?;
+        if let Some(range) = range {
+            check_range(path, range)?;
+        }
 
         let (mut ref_map, head) = load_refs(path);
 
         let stashes = load_all_stashes(path, mailmap);
-        let commits = load_all_commits(path, sort, &head, &stashes, max_count, mailmap);
-        if commits.is_empty() {
-            return Err("no commits in the repository".into());
-        }
+        let commits = load_all_commits(path, sort, &head, &stashes, max_count, range, mailmap);
 
         let commits = merge_stashes_to_commits(commits, stashes);
-        let commits = merge_worktree_to_commits(commits, load_worktree_commit(path));
+        let commits =
+            merge_worktree_to_commits(commits, load_worktree_commit(path), range.is_some());
+        if commits.is_empty() {
+            return Err(match range {
+                Some(range) => format!("no commits in {range}").into(),
+                None => "no commits in the repository".into(),
+            });
+        }
         let commit_hashes = commits.iter().map(|c| c.commit_hash.clone()).collect();
-        let line_stats = load_line_stats(path, &commits, max_count);
+        let line_stats = load_line_stats(path, &commits, max_count, range);
 
         let (parents_map, children_map) = build_commits_maps(&commits);
         let commit_map = to_commit_map(commits);
 
         let stash_ref_map = load_stashes_as_refs(path);
         merge_ref_maps(&mut ref_map, stash_ref_map);
+        // The refs panel lists only what the range shows.
+        if range.is_some() {
+            ref_map.retain(|hash, _| commit_map.contains_key(hash));
+        }
 
         Ok(Self::new(
             path.to_path_buf(),
@@ -260,6 +274,20 @@ fn check_git_repository(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn check_range(path: &Path, range: &str) -> Result<()> {
+    let output = Command::new("git")
+        .arg("rev-parse")
+        .args(range.split_whitespace())
+        .arg("--")
+        .current_dir(path)
+        .output()?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("bad range {range}: {}", err.trim()).into());
+    }
+    Ok(())
+}
+
 fn is_inside_work_tree(path: &Path) -> bool {
     let output = Command::new("git")
         .arg("rev-parse")
@@ -286,6 +314,7 @@ fn load_all_commits(
     head: &Head,
     stashes: &[Commit],
     max_count: Option<usize>,
+    range: Option<&str>,
     mailmap: bool,
 ) -> Vec<Commit> {
     let mut cmd = Command::new("git");
@@ -299,16 +328,22 @@ fn load_all_commits(
     .arg("--date=iso-strict")
     .arg("-z"); // use NUL as a delimiter
 
-    // exclude stashes and other refs
-    cmd.arg("--branches").arg("--remotes").arg("--tags");
+    if let Some(range) = range {
+        // Stashes based inside the range still show; their parents
+        // are not walked, so the rest drop out.
+        cmd.args(range.split_whitespace());
+    } else {
+        // exclude stashes and other refs
+        cmd.arg("--branches").arg("--remotes").arg("--tags");
 
-    // commits that are reachable from the stashes
-    stashes.iter().for_each(|stash| {
-        cmd.arg(stash.parent_commit_hashes[0].as_str());
-    });
+        // commits that are reachable from the stashes
+        stashes.iter().for_each(|stash| {
+            cmd.arg(stash.parent_commit_hashes[0].as_str());
+        });
 
-    if !matches!(head, Head::None) {
-        cmd.arg("HEAD");
+        if !matches!(head, Head::None) {
+            cmd.arg("HEAD");
+        }
     }
 
     if let Some(n) = max_count {
@@ -503,12 +538,22 @@ fn load_worktree_commit(path: &Path) -> Option<Commit> {
     })
 }
 
-fn merge_worktree_to_commits(mut commits: Vec<Commit>, worktree: Option<Commit>) -> Vec<Commit> {
+fn merge_worktree_to_commits(
+    mut commits: Vec<Commit>,
+    worktree: Option<Commit>,
+    keep_without_head: bool,
+) -> Vec<Commit> {
     let Some(worktree) = worktree else {
         return commits;
     };
     let head = &worktree.parent_commit_hashes[0];
     let Some(mut pos) = commits.iter().position(|c| c.commit_hash == *head) else {
+        // A range can leave HEAD out, as on a branch with nothing past
+        // its parent yet. The row still goes on top: the select hook
+        // takes the boot selection as its baseline.
+        if keep_without_head {
+            commits.insert(0, worktree);
+        }
         return commits;
     };
     // Adjacent to HEAD, not the graph's top: WIP belongs to the checked-out
@@ -773,11 +818,17 @@ fn load_line_stats(
     path: &Path,
     commits: &[Commit],
     max_count: Option<usize>,
+    range: Option<&str>,
 ) -> FxHashMap<CommitHash, (u64, u64)> {
     let mut stats: FxHashMap<CommitHash, (u64, u64)> = FxHashMap::default();
     let cap = max_count.unwrap_or(1000).min(1000);
-    if let Ok(out) = Command::new("git")
-        .args(["log", "--numstat", "--format=%H", "--branches", "--remotes", "--tags"])
+    let mut cmd = Command::new("git");
+    cmd.args(["log", "--numstat", "--format=%H"]);
+    match range {
+        Some(range) => cmd.args(range.split_whitespace()),
+        None => cmd.args(["--branches", "--remotes", "--tags"]),
+    };
+    if let Ok(out) = cmd
         .arg(format!("--max-count={cap}"))
         .current_dir(path)
         .output()
